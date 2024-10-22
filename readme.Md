@@ -1,5 +1,3 @@
-Here's a comprehensive `README.md` template to document your cryptocurrency codebase. You can modify it according to your preferences or specific details about your project.
-
 ````markdown
 # Cryptocurrency Blockchain Implementation
 
@@ -171,8 +169,3 @@ struct Wallet {
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-```
-
-Feel free to adjust any sections or add more details specific to your implementation!
-```
