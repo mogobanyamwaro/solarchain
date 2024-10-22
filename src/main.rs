@@ -233,6 +233,10 @@ fn main() {
     let wallet1 = Wallet::new();
     let wallet2 = Wallet::new();
 
+       // Set initial balance for wallet1
+    blockchain.balances.insert(wallet1.get_public_key(), 100); // Initialize wallet1 with 100 coins
+
+
     // Create and process a transaction
     let transaction = Transaction::new(&wallet1.private_key, wallet2.get_public_key(), 10);
  blockchain.create_transaction(transaction, &wallet1.public_key);
