@@ -60,7 +60,7 @@ impl Block {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
         let hash = String::new();
         let nonce = 0;
-        let mut block = Block {
+        let mut block = Block { 
             index,
             timestamp,
             previous_hash,
@@ -121,31 +121,64 @@ impl Blockchain {
         self.chain.last().unwrap()
     }
 
-    fn create_transaction(&mut self, transaction: Transaction) {
+    fn create_transaction(&mut self, transaction: Transaction,sender_public_key:&RsaPublicKey) {
         // Ensure sender has enough balance
         let sender_balance = *self.balances.get(&transaction.sender).unwrap_or(&0);
-        if sender_balance >= transaction.amount {
+        if transaction.verify(sender_public_key){
+         if sender_balance >= transaction.amount {
             self.pending_transactions.push(transaction);
         } else {
             println!("Transaction failed: insufficient balance");
         }
+        }else{
+            println!("Transaction failed: invalid signature")
+        }
+      
     }
 
-    fn mine_pending_transactions(&mut self, miner_address: String) {
-        let transactions = self.pending_transactions.clone();
-        let previous_hash = self.get_latest_block().hash.clone();
-        let new_block = Block::new(self.chain.len() as u64, previous_hash, transactions, self.difficulty);
+  fn mine_pending_transactions(&mut self, miner_address: String) {
+    let previous_hash = self.get_latest_block().hash.clone();
+    
+    // Add transactions to the block
+    let new_block = Block::new(self.chain.len() as u64, previous_hash, self.pending_transactions.clone(), self.difficulty);
 
-        // Add the new block to the chain
-        self.chain.push(new_block);
-
-        // Reward the miner
-        self.balances.entry(miner_address.clone()).or_insert(0);
-        *self.balances.get_mut(&miner_address).unwrap() += self.mining_reward;
-
-        // Clear pending transactions
-        self.pending_transactions.clear();
+    // Display the transactions for this block (to use the transactions field)
+    println!("Block {} contains the following transactions:", new_block.index);
+    for transaction in &new_block.transactions {
+        println!("{:?}", transaction);
     }
+
+    // Add the new block to the chain
+    self.chain.push(new_block);
+
+    // Update balances for transactions in the block
+    for transaction in &self.pending_transactions {
+        // Deduct from the sender
+        if let Some(sender_balance) = self.balances.get_mut(&transaction.sender) {
+            *sender_balance -= transaction.amount;
+        }
+
+        // Add to the receiver
+        self.balances.entry(transaction.receiver.clone()).or_insert(0);
+        *self.balances.get_mut(&transaction.receiver).unwrap() += transaction.amount;
+    }
+
+    // Reward the miner
+    self.balances.entry(miner_address.clone()).or_insert(0);
+    *self.balances.get_mut(&miner_address).unwrap() += self.mining_reward;
+
+    // Clear pending transactions
+    self.pending_transactions.clear();
+}
+ fn display_chain(&self) {
+        for block in &self.chain {
+            println!("Block {} has the following transactions:", block.index);
+            for transaction in &block.transactions {
+                println!("{:?}", transaction);
+            }
+        }
+    }
+
 }
 
 #[derive(Debug)]
@@ -180,7 +213,7 @@ fn main() {
 
     // Create and process a transaction
     let transaction = Transaction::new(&wallet1.private_key, wallet2.get_public_key(), 10);
-    blockchain.create_transaction(transaction);
+ blockchain.create_transaction(transaction, &wallet1.public_key);
 
     // Mine pending transactions and reward miner
     blockchain.mine_pending_transactions(wallet1.get_public_key());
@@ -188,4 +221,6 @@ fn main() {
     // Check wallet balances
     println!("Wallet1 balance: {}", blockchain.balances.get(&wallet1.get_public_key()).unwrap_or(&0));
     println!("Wallet2 balance: {}", blockchain.balances.get(&wallet2.get_public_key()).unwrap_or(&0));
+    // Display the chain with transactions
+blockchain.display_chain();
 }
