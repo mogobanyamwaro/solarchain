@@ -1,31 +1,43 @@
+// Import necessary crates for hashing (SHA-256), random number generation, and RSA encryption
 extern crate sha2;
 extern crate rand;
 
+use rand::rngs::OsRng; // For random number generation using OS's random generator
+use sha2::{Sha256, Digest}; // For SHA-256 hashing
+use rsa::{PaddingScheme, PublicKey, PublicKeyParts, RsaPrivateKey, RsaPublicKey}; // For RSA keys and padding schemes
+use std::collections::HashMap; // For storing balances using a hash map
+use std::time::{SystemTime, UNIX_EPOCH}; // For timestamps
 
-use rand::rngs::OsRng;
-use sha2::{Sha256, Digest};
-use rsa::{PaddingScheme, PublicKey, PublicKeyParts, RsaPrivateKey, RsaPublicKey};
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-#[derive(Debug,Clone)]
+// Struct representing a transaction between two parties
+#[derive(Debug, Clone)]
 struct Transaction {
-    sender: String,
-    receiver: String,
-    amount: u64,
-    signature: Vec<u8>,
+    sender: String, // Base64 encoded public key of the sender
+    receiver: String, // Base64 encoded public key of the receiver
+    amount: u64, // Amount being transferred
+    signature: Vec<u8>, // Digital signature of the transaction
 }
 
+// Implementation of the Transaction struct
 impl Transaction {
+    // Constructor for creating a new transaction
     fn new(sender: &RsaPrivateKey, receiver: String, amount: u64) -> Self {
+        // Convert sender's private key to public key and encode it
         let sender_public_key = sender.to_public_key();
         let sender_key_str = base64::encode(sender_public_key.n().to_bytes_be());
+        
+        // Create a string representation of the transaction data
         let transaction_data = format!("{}{}{}", sender_key_str, receiver, amount);
-
+        
+        // Hash the transaction data
         let hashed_data = Sha256::digest(transaction_data.as_bytes());
+        
+        // Create a padding scheme for signing the transaction
         let padding = PaddingScheme::new_pkcs1v15_sign(None);
+        
+        // Sign the hashed transaction data with the sender's private key
         let signature = sender.sign(padding, &hashed_data).unwrap();
         
+        // Return a new Transaction object
         Transaction {
             sender: sender_key_str,
             receiver,
@@ -34,32 +46,46 @@ impl Transaction {
         }
     }
 
+    // Method to verify a transaction's signature
     fn verify(&self, public_key: &RsaPublicKey) -> bool {
+        // Recreate the transaction data string for verification
         let transaction_data = format!("{}{}{}", self.sender, self.receiver, self.amount);
+        
+        // Create a padding scheme for verification
         let padding = PaddingScheme::new_pkcs1v15_sign(None);
+        
+        // Verify the signature using the public key
         public_key.verify(
             padding,
             &Sha256::digest(transaction_data.as_bytes()),
             &self.signature,
-        ).is_ok()
+        ).is_ok() // Returns true if the verification is successful
     }
 }
 
+// Struct representing a block in the blockchain
 #[derive(Debug)]
 struct Block {
-    index: u64,
-    timestamp: u128,
-    previous_hash: String,
-    hash: String,
-    nonce: u64,
-    transactions: Vec<Transaction>,
+    index: u64, // Position of the block in the chain
+    timestamp: u128, // Time the block was created
+    previous_hash: String, // Hash of the previous block
+    hash: String, // Current block's hash
+    nonce: u64, // Number used for mining (proof of work)
+    transactions: Vec<Transaction>, // Transactions included in the block
 }
 
+// Implementation of the Block struct
 impl Block {
+    // Constructor for creating a new block
     fn new(index: u64, previous_hash: String, transactions: Vec<Transaction>, difficulty: usize) -> Block {
+        // Get current timestamp
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        
+        // Initialize an empty hash and nonce
         let hash = String::new();
         let nonce = 0;
+        
+        // Create the block and calculate its hash
         let mut block = Block { 
             index,
             timestamp,
@@ -69,184 +95,208 @@ impl Block {
             transactions,
         };
         block.hash = block.calculate_hash();
-        block.mine_block(difficulty);
+        block.mine_block(difficulty); // Mine the block to find a valid hash
         block
     }
 
+    // Method to calculate the hash of the block
     fn calculate_hash(&self) -> String {
+        // Create a string representation of the block's properties
         let input = format!("{}{}{}{}", self.index, self.timestamp, self.previous_hash, self.nonce);
+        
+        // Create a SHA-256 hasher and update it with the input
         let mut hasher = Sha256::new();
         hasher.update(input);
+        
+        // Return the calculated hash as a hexadecimal string
         format!("{:x}", hasher.finalize())
     }
 
+    // Method to mine the block (find a valid hash based on difficulty)
     fn mine_block(&mut self, difficulty: usize) {
+        // Create a target hash prefix based on difficulty (e.g., "0000" for difficulty 4)
         let target = "0".repeat(difficulty);
+        
+        // Keep incrementing nonce until a valid hash is found
         while &self.hash[..difficulty] != target {
             self.nonce += 1;
-            self.hash = self.calculate_hash();
+            self.hash = self.calculate_hash(); // Recalculate hash with the new nonce
         }
-        println!("Block mined! Hash: {}", self.hash);
+        println!("Block mined! Hash: {}", self.hash); // Output mined hash
     }
 }
 
+// Struct representing the blockchain itself
 #[derive(Debug)]
 struct Blockchain {
-    chain: Vec<Block>,
-    difficulty: usize,
-    pending_transactions: Vec<Transaction>,
-    mining_reward: u64,
+    chain: Vec<Block>, // List of blocks in the blockchain
+    difficulty: usize, // Difficulty of mining
+    pending_transactions: Vec<Transaction>, // Transactions waiting to be added to a block
+    mining_reward: u64, // Reward given to miners
     balances: HashMap<String, u64>, // Track wallet balances
-    total_mined: u64,
+    total_mined: u64, // Total coins mined
 }
+
+// Define the total supply limit for the coin
 const TOTAL_SUPPLY: u64 = 21_000_000; // Total limit of coins
 
-
+// Implementation of the Blockchain struct
 impl Blockchain {
+    // Constructor for creating a new blockchain
     fn new(difficulty: usize, mining_reward: u64) -> Self {
         let mut blockchain = Blockchain {
-            chain: vec![],
+            chain: vec![], // Initialize with an empty chain
             difficulty,
-            pending_transactions: vec![],
+            pending_transactions: vec![], // Initialize with no pending transactions
             mining_reward,
-            balances: HashMap::new(),
-            total_mined:0
+            balances: HashMap::new(), // Initialize with no balances
+            total_mined: 0, // Initialize total mined coins to zero
         };
-        blockchain.create_genesis_block();
+        blockchain.create_genesis_block(); // Create the first block (genesis block)
         blockchain
     }
 
+    // Method to create the genesis block
     fn create_genesis_block(&mut self) {
+        // Create a block with index 0, no transactions, and a previous hash of "0"
         let genesis_block = Block::new(0, String::from("0"), vec![], self.difficulty);
-        self.chain.push(genesis_block);
+        self.chain.push(genesis_block); // Add it to the chain
     }
 
+    // Method to get the latest block in the chain
     fn get_latest_block(&self) -> &Block {
-        self.chain.last().unwrap()
+        self.chain.last().unwrap() // Return the last block
     }
 
-    fn create_transaction(&mut self, transaction: Transaction,sender_public_key:&RsaPublicKey) {
-        // Ensure sender has enough balance
+    // Method to create and add a transaction to the pending transactions
+    fn create_transaction(&mut self, transaction: Transaction, sender_public_key: &RsaPublicKey) {
+        // Ensure the sender has enough balance to make the transaction
         let sender_balance = *self.balances.get(&transaction.sender).unwrap_or(&0);
-        if transaction.verify(sender_public_key){
-         if sender_balance >= transaction.amount {
-            self.pending_transactions.push(transaction);
+        
+        // Verify the transaction signature
+        if transaction.verify(sender_public_key) {
+            if sender_balance >= transaction.amount {
+                self.pending_transactions.push(transaction); // Add to pending transactions if valid
+            } else {
+                println!("Transaction failed: insufficient balance"); // Notify insufficient balance
+            }
         } else {
-            println!("Transaction failed: insufficient balance");
+            println!("Transaction failed: invalid signature"); // Notify invalid signature
         }
-        }else{
-            println!("Transaction failed: invalid signature")
-        }
-      
     }
 
-fn mine_pending_transactions(&mut self, miner_address: String) {
-    if self.pending_transactions.is_empty() {
-        println!("No transactions to mine.");
-        return;
-    }
-
-    let previous_hash = self.get_latest_block().hash.clone();
-    
-    // Create a new block with the pending transactions
-    let new_block = Block::new(
-        self.chain.len() as u64,
-        previous_hash,
-        self.pending_transactions.clone(), // Clone the pending transactions
-        self.difficulty,
-    );
-
-    // Display the transactions for this block
-    println!("Block {} contains the following transactions:", new_block.index);
-    for transaction in &new_block.transactions {
-        println!("{:?}", transaction);
-    }
-
-    // Add the new block to the chain
-    self.chain.push(new_block);
-
-    // Update balances for transactions in the block
-    for transaction in &self.pending_transactions {
-        // Deduct from the sender's balance
-        if let Some(sender_balance) = self.balances.get_mut(&transaction.sender) {
-            *sender_balance -= transaction.amount;
+    // Method to mine pending transactions and create a new block
+    fn mine_pending_transactions(&mut self, miner_address: String) {
+        if self.pending_transactions.is_empty() {
+            println!("No transactions to mine."); // Notify if no transactions are pending
+            return; // Exit if no transactions to mine
         }
 
-        // Add to the receiver's balance
-        self.balances.entry(transaction.receiver.clone()).or_insert(0);
-        *self.balances.get_mut(&transaction.receiver).unwrap() += transaction.amount;
+        // Get the hash of the latest block to link the new block
+        let previous_hash = self.get_latest_block().hash.clone();
+        
+        // Create a new block with the pending transactions
+        let new_block = Block::new(
+            self.chain.len() as u64, // Block index
+            previous_hash, // Previous block hash
+            self.pending_transactions.clone(), // Clone the pending transactions
+            self.difficulty, // Difficulty level
+        );
+
+        // Display the transactions included in this block
+        println!("Block {} contains the following transactions:", new_block.index);
+        for transaction in &new_block.transactions {
+            println!("{:?}", transaction); // Print each transaction
+        }
+
+        // Add the new block to the chain
+        self.chain.push(new_block);
+
+        // Update balances for the transactions in the newly mined block
+        for transaction in &self.pending_transactions {
+            // Deduct the transaction amount from the sender's balance
+            if let Some(sender_balance) = self.balances.get_mut(&transaction.sender) {
+                *sender_balance -= transaction.amount; // Update sender's balance
+            }
+
+            // Add the transaction amount to the receiver's balance
+            self.balances.entry(transaction.receiver.clone()).or_insert(0); // Initialize if not exists
+            *self.balances.get_mut(&transaction.receiver).unwrap() += transaction.amount; // Update receiver's balance
+        }
+
+        // Reward the miner with mining reward, ensuring it doesn't exceed the total supply limit
+        if self.total_mined + self.mining_reward <= TOTAL_SUPPLY {
+            self.balances.entry(miner_address.clone()).or_insert(0); // Initialize miner's balance if not exists
+            *self.balances.get_mut(&miner_address).unwrap() += self.mining_reward; // Reward the miner
+            self.total_mined += self.mining_reward; // Update total coins mined
+        } else {
+            println!("Mining reward exceeds total supply limit."); // Notify if reward exceeds limit
+        }
+
+        // Clear pending transactions after mining
+        self.pending_transactions.clear();
     }
 
-    // Reward the miner
-   
-    // Reward the miner, ensuring the total supply is not exceeded
-    if self.total_mined + self.mining_reward <= TOTAL_SUPPLY {
-        self.balances.entry(miner_address.clone()).or_insert(0);
-        *self.balances.get_mut(&miner_address).unwrap() += self.mining_reward;
-        self.total_mined += self.mining_reward; // Update total coins mined
-    } else {
-        println!("Mining reward exceeds total supply limit.");
-    }
-
-    // Clear pending transactions after adding them to the block
-    self.pending_transactions.clear();
-}
-
- fn display_chain(&self) {
+    // Method to display the entire blockchain with transactions
+    fn display_chain(&self) {
         for block in &self.chain {
             println!("Block {} has the following transactions:", block.index);
             for transaction in &block.transactions {
-                println!("{:?}", transaction);
+                println!("{:?}", transaction); // Print each transaction in the block
             }
         }
     }
-
 }
 
+// Struct representing a wallet for managing RSA keys
 #[derive(Debug)]
 struct Wallet {
-    private_key: RsaPrivateKey,
-    public_key: RsaPublicKey,
+    private_key: RsaPrivateKey, // Private key for signing transactions
+    public_key: RsaPublicKey, // Public key for receiving transactions
 }
 
+// Implementation of the Wallet struct
 impl Wallet {
+    // Constructor for creating a new wallet
     fn new() -> Self {
-        let mut rng = OsRng;
-        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-        let public_key = private_key.to_public_key();
-        Wallet { private_key, public_key }
+        let mut rng = OsRng; // Create a random number generator
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap(); // Generate a new RSA private key
+        let public_key = private_key.to_public_key(); // Derive the public key from the private key
+        Wallet { private_key, public_key } // Return a new Wallet instance
     }
 
+    // Method to get the public key as a base64 encoded string
     fn get_public_key(&self) -> String {
-        base64::encode(self.public_key.n().to_bytes_be())
+        base64::encode(self.public_key.n().to_bytes_be()) // Encode and return the public key
     }
 }
 
+// Main function where the program execution begins
 fn main() {
-    let difficulty = 4;
-    let mining_reward = 50;
+    let difficulty = 4; // Difficulty level for mining
+    let mining_reward = 50; // Reward for mining a new block
 
-    // Create blockchain
+    // Create a new blockchain instance
     let mut blockchain = Blockchain::new(difficulty, mining_reward);
 
-    // Create two wallets
+    // Create two wallets (users) for transactions
     let wallet1 = Wallet::new();
     let wallet2 = Wallet::new();
 
-       // Set initial balance for wallet1
+    // Set initial balance for wallet1
     blockchain.balances.insert(wallet1.get_public_key(), 100); // Initialize wallet1 with 100 coins
 
-
-    // Create and process a transaction
+    // Create and process a transaction from wallet1 to wallet2
     let transaction = Transaction::new(&wallet1.private_key, wallet2.get_public_key(), 10);
- blockchain.create_transaction(transaction, &wallet1.public_key);
+    blockchain.create_transaction(transaction, &wallet1.public_key); // Create the transaction
 
-    // Mine pending transactions and reward miner
+    // Mine pending transactions and reward the miner (wallet1)
     blockchain.mine_pending_transactions(wallet1.get_public_key());
 
-    // Check wallet balances
+    // Check and display wallet balances after the transaction
     println!("Wallet1 balance: {}", blockchain.balances.get(&wallet1.get_public_key()).unwrap_or(&0));
     println!("Wallet2 balance: {}", blockchain.balances.get(&wallet2.get_public_key()).unwrap_or(&0));
-    // Display the chain with transactions
-blockchain.display_chain();
+
+    // Display the entire blockchain with all transactions
+    blockchain.display_chain();
 }
