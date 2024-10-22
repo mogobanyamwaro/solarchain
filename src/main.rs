@@ -97,7 +97,10 @@ struct Blockchain {
     pending_transactions: Vec<Transaction>,
     mining_reward: u64,
     balances: HashMap<String, u64>, // Track wallet balances
+    total_mined: u64,
 }
+const TOTAL_SUPPLY: u64 = 21_000_000; // Total limit of coins
+
 
 impl Blockchain {
     fn new(difficulty: usize, mining_reward: u64) -> Self {
@@ -107,6 +110,7 @@ impl Blockchain {
             pending_transactions: vec![],
             mining_reward,
             balances: HashMap::new(),
+            total_mined:0
         };
         blockchain.create_genesis_block();
         blockchain
@@ -136,13 +140,23 @@ impl Blockchain {
       
     }
 
-  fn mine_pending_transactions(&mut self, miner_address: String) {
+fn mine_pending_transactions(&mut self, miner_address: String) {
+    if self.pending_transactions.is_empty() {
+        println!("No transactions to mine.");
+        return;
+    }
+
     let previous_hash = self.get_latest_block().hash.clone();
     
-    // Add transactions to the block
-    let new_block = Block::new(self.chain.len() as u64, previous_hash, self.pending_transactions.clone(), self.difficulty);
+    // Create a new block with the pending transactions
+    let new_block = Block::new(
+        self.chain.len() as u64,
+        previous_hash,
+        self.pending_transactions.clone(), // Clone the pending transactions
+        self.difficulty,
+    );
 
-    // Display the transactions for this block (to use the transactions field)
+    // Display the transactions for this block
     println!("Block {} contains the following transactions:", new_block.index);
     for transaction in &new_block.transactions {
         println!("{:?}", transaction);
@@ -153,23 +167,31 @@ impl Blockchain {
 
     // Update balances for transactions in the block
     for transaction in &self.pending_transactions {
-        // Deduct from the sender
+        // Deduct from the sender's balance
         if let Some(sender_balance) = self.balances.get_mut(&transaction.sender) {
             *sender_balance -= transaction.amount;
         }
 
-        // Add to the receiver
+        // Add to the receiver's balance
         self.balances.entry(transaction.receiver.clone()).or_insert(0);
         *self.balances.get_mut(&transaction.receiver).unwrap() += transaction.amount;
     }
 
     // Reward the miner
-    self.balances.entry(miner_address.clone()).or_insert(0);
-    *self.balances.get_mut(&miner_address).unwrap() += self.mining_reward;
+   
+    // Reward the miner, ensuring the total supply is not exceeded
+    if self.total_mined + self.mining_reward <= TOTAL_SUPPLY {
+        self.balances.entry(miner_address.clone()).or_insert(0);
+        *self.balances.get_mut(&miner_address).unwrap() += self.mining_reward;
+        self.total_mined += self.mining_reward; // Update total coins mined
+    } else {
+        println!("Mining reward exceeds total supply limit.");
+    }
 
-    // Clear pending transactions
+    // Clear pending transactions after adding them to the block
     self.pending_transactions.clear();
 }
+
  fn display_chain(&self) {
         for block in &self.chain {
             println!("Block {} has the following transactions:", block.index);
