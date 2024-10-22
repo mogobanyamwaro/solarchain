@@ -7,10 +7,13 @@ use sha2::{Sha256, Digest}; // For SHA-256 hashing
 use rsa::{PaddingScheme, PublicKey, PublicKeyParts, RsaPrivateKey, RsaPublicKey}; // For RSA keys and padding schemes
 use std::collections::HashMap; // For storing balances using a hash map
 use std::time::{SystemTime, UNIX_EPOCH}; // For timestamps
+// use tokio::net::{TcpListener, TcpStream};
+// use tokio::*;
+// use serde::{Serialize, Deserialize};
 
 // Struct representing a transaction between two parties
 #[derive(Debug, Clone)]
-struct Transaction {
+struct Transaction { 
     sender: String, // Base64 encoded public key of the sender
     receiver: String, // Base64 encoded public key of the receiver
     amount: u64, // Amount being transferred
@@ -44,6 +47,13 @@ impl Transaction {
             amount,
             signature,
         }
+    }
+
+    fn id(&self) -> String {
+        let transaction_data = format!("{}{}{}", self.sender, self.receiver, self.amount);
+        let mut hasher = Sha256::new();
+        hasher.update(transaction_data);
+        format!("{:x}", hasher.finalize())
     }
 
     // Method to verify a transaction's signature
@@ -125,6 +135,17 @@ impl Block {
         println!("Block mined! Hash: {}", self.hash); // Output mined hash
     }
 }
+// UTXO (Unspent Transaction Output)
+// The UTXO model keeps track of unspent outputs rather than maintaining account balances directly.
+//  Each transaction consumes UTXOs as inputs and creates new UTXOs as outputs.
+#[derive(Debug, Clone)]
+struct UTXO {
+    tx_id: String, // ID of the transaction that created this UTXO
+    output_index: usize, // Output index in the transaction
+    amount: u64, // Amount of this UTXO
+    receiver: String, // Receiver of this UTXO
+}
+
 
 // Struct representing the blockchain itself
 #[derive(Debug)]
@@ -135,6 +156,7 @@ struct Blockchain {
     mining_reward: u64, // Reward given to miners
     balances: HashMap<String, u64>, // Track wallet balances
     total_mined: u64, // Total coins mined
+    utxos: HashMap<String, Vec<UTXO>>, // Map of public keys to their UTXOs
 }
 
 // Define the total supply limit for the coin
@@ -151,6 +173,7 @@ impl Blockchain {
             mining_reward,
             balances: HashMap::new(), // Initialize with no balances
             total_mined: 0, // Initialize total mined coins to zero
+            utxos:HashMap::new(),
         };
         blockchain.create_genesis_block(); // Create the first block (genesis block)
         blockchain
@@ -172,13 +195,25 @@ impl Blockchain {
     fn create_transaction(&mut self, transaction: Transaction, sender_public_key: &RsaPublicKey) {
         // Ensure the sender has enough balance to make the transaction
         let sender_balance = *self.balances.get(&transaction.sender).unwrap_or(&0);
+        // let sender_utxos = self.utxos.get(&transaction.sender).unwrap();
+        // let total_amount: u64 = sender_utxos.iter().map(|utxo| utxo.amount).sum();
         
         // Verify the transaction signature
         if transaction.verify(sender_public_key) {
             if sender_balance >= transaction.amount {
-                self.pending_transactions.push(transaction); // Add to pending transactions if valid
+                  let tx_id = transaction.id();
+              
+                 let new_utxo = UTXO {
+                      tx_id, // Use signature as a transaction ID (you can use a better ID)
+                    output_index: self.utxos.get(&transaction.receiver).unwrap_or(&vec![]).len(),
+                    amount: transaction.amount,
+                    receiver: transaction.receiver.clone(),
+                 };
+                  // Add UTXOs to the receiver
+        self.utxos.entry(transaction.receiver.clone()).or_insert(vec![]).push(new_utxo);
+          self.pending_transactions.push(transaction); // Add to pending transactions if valid
             } else {
-                println!("Transaction failed: insufficient balance"); // Notify insufficient balance
+                  println!("Transaction failed: insufficient UTXO"); // Notify insufficient UTXO
             }
         } else {
             println!("Transaction failed: invalid signature"); // Notify invalid signature
@@ -211,8 +246,62 @@ impl Blockchain {
 
         // Add the new block to the chain
         self.chain.push(new_block);
+         // Update balances for the transactions in the newly mined block in UTXO
+         for transaction in &self.pending_transactions {
+        // Deduct the transaction amount from the sender's balance
+        if let Some(sender_utxos) = self.utxos.get_mut(&transaction.sender) {
+            let total_amount: u64 = sender_utxos.iter().map(|utxo| utxo.amount).sum();
+            if total_amount >= transaction.amount {
+                // Process each UTXO and create new UTXOs
+                let mut amount_to_spend = transaction.amount;
 
-        // Update balances for the transactions in the newly mined block
+                // Create new UTXOs for the transaction
+                for utxo in sender_utxos.clone() {
+                    if amount_to_spend == 0 {
+                        break; // If we have spent enough, stop
+                    }
+                    // Deduct from the UTXO if it's less than or equal to what we need
+                    if utxo.amount <= amount_to_spend {
+                        amount_to_spend -= utxo.amount; // Subtract the amount from the total to spend
+                        // Remove this UTXO as it has been spent
+                        sender_utxos.retain(|u| u.tx_id != utxo.tx_id); 
+                    }
+                }
+
+                // Safely borrow the receiver's UTXOs after finishing the mutable borrow
+                let output_index = self.utxos.get(&transaction.receiver).map_or(0, |v| v.len());
+                
+                // Add the transaction amount to the receiver's UTXOs
+                self.utxos.entry(transaction.receiver.clone())
+                    .or_insert(vec![]) // Initialize if not exists
+                    .push(UTXO {
+                        tx_id: transaction.id(), // Assuming you have an id() method in Transaction
+                        output_index,
+                        amount: transaction.amount,
+                        receiver: transaction.receiver.clone(),
+                    });
+
+                // Handle miner's reward
+                let miner_utxos = self.utxos.entry(miner_address.clone()).or_insert(vec![]); // Get or initialize miner's UTXOs
+                
+                // Reward the miner with mining reward, ensuring it doesn't exceed the total supply limit
+                if self.total_mined + self.mining_reward <= TOTAL_SUPPLY {
+                    miner_utxos.push(UTXO {
+                        tx_id: format!("miner_reward_{}", self.chain.len()), // Example ID for mining reward
+                        output_index: miner_utxos.len(), // Use miner's UTXOs length
+                        amount: self.mining_reward,
+                        receiver: miner_address.clone(),
+                    });
+                    self.total_mined += self.mining_reward; // Update total coins mined
+                } else {
+                    println!("Mining reward exceeds total supply limit."); // Notify if reward exceeds limit
+                }
+            } else {
+                println!("Transaction failed: insufficient UTXO for sender"); // Notify insufficient UTXO
+            }
+        }
+    }
+        // Update balances for the transactions in the newly mined block for the normal one
         for transaction in &self.pending_transactions {
             // Deduct the transaction amount from the sender's balance
             if let Some(sender_balance) = self.balances.get_mut(&transaction.sender) {
@@ -271,10 +360,61 @@ impl Wallet {
     }
 }
 
+#[derive(Debug)]
+struct Node {
+    id: String,
+    peers: Vec<String>, // List of peers
+    blockchain: Blockchain,
+}
+// impl Node {
+//     fn new(id: &str, difficulty: usize) -> Self {
+//         Node {
+//             id: id.to_string(),
+//             peers: vec![],
+//             blockchain: Blockchain::new(difficulty),
+//         }
+//     }
+
+//     async fn send_block(&self, block: &Block) {
+//         let block_json = serde_json::to_string(block).unwrap();
+//         for peer in &self.peers {
+//             match TcpStream::connect(peer).await {
+//                 Ok(mut stream) => {
+//                     let _ = stream.write_all(block_json.as_bytes()).await;
+//                 }
+//                 Err(e) => println!("Failed to connect to peer {}: {}", peer, e),
+//             }
+//         }
+//     }
+
+//     async fn listen_for_blocks(&mut self) {
+//         let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
+//         loop {
+//             let (mut socket, _) = listener.accept().await.unwrap();
+//             let mut buf = vec![0; 1024];
+//             let n = socket.read(&mut buf).await.unwrap();
+//             let block_json = String::from_utf8_lossy(&buf[..n]);
+//             let block: Block = serde_json::from_str(&block_json).unwrap();
+//             println!("Received block: {:?}", block);
+//             self.blockchain.chain.push(block); // Add the received block to the blockchain
+//         }
+//     }
+// }
+
+
 // Main function where the program execution begins
-fn main() {
+#[tokio::main]
+async fn main() {
     let difficulty = 4; // Difficulty level for mining
     let mining_reward = 50; // Reward for mining a new block
+    //  let mut node = Node::new("node1", 4);
+    // node.peers.push("127.0.0.1:8081".to_string()); // Add peers as needed
+
+    // // Start listening for incoming blocks
+    // tokio::spawn(async move {
+    //     node.listen_for_blocks().await;
+    // });
+    
 
     // Create a new blockchain instance
     let mut blockchain = Blockchain::new(difficulty, mining_reward);
